@@ -50,6 +50,10 @@ def get_wb_products(query="электростимулятор", pages=3):
                 "feedbacks": product.get("feedbacks", 0),
                 "brand": product["brand"]
             })
+        
+        delay = random.uniform(0.5, 1.5)
+        time.sleep(delay)
+        print(f"Страница {page} получена")
             
     return pd.DataFrame(all_products)
 
