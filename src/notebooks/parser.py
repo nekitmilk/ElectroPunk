@@ -51,6 +51,7 @@ def get_wb_products(query="электростимулятор", pages=3):
                 "brand": product["brand"]
             })
         
+        # Поправить задержку на моменте, когда API уже ничего не возвращает
         delay = random.uniform(0.5, 1.5)
         time.sleep(delay)
         print(f"Страница {page} получена")
