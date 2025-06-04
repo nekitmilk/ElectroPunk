@@ -58,7 +58,6 @@ def get_wb_products(query="электростимулятор", pages=3):
             
     return pd.DataFrame(all_products)
 
-# Инициализация драйвера один раз (вне функции)
 def init_driver_Chrome():
     chrome_options = Options()
     # chrome_options.add_argument("--headless=new")
@@ -66,7 +65,6 @@ def init_driver_Chrome():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
-    # Для автоматического определения архитектуры M1
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
     stealth(driver, 
@@ -82,18 +80,16 @@ def init_driver_firefox(headless = False):
 
     if headless:
         firefox_options.add_argument("--headless")
-        firefox_options.set_preference("layout.css.devPixelsPerPx", "1")  # Фиксируем масштаб
+        firefox_options.set_preference("layout.css.devPixelsPerPx", "1")
         
-    # Настройки для ускорения и stealth
     firefox_options.set_preference("dom.webdriver.enabled", False)
     firefox_options.set_preference("useAutomationExtension", False)
     firefox_options.set_preference("browser.cache.disk.enable", True)
     firefox_options.set_preference("browser.cache.memory.enable", True)
     firefox_options.set_preference("browser.cache.offline.enable", True)
     firefox_options.set_preference("network.http.use-cache", True)
-    firefox_options.set_preference("permissions.default.image", 2)  # Блокировка изображений
+    firefox_options.set_preference("permissions.default.image", 2)
     
-    # Случайный User-Agent из реальных браузеров
     user_agents = [
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/115.0",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0",
@@ -101,45 +97,36 @@ def init_driver_firefox(headless = False):
     ]
     firefox_options.set_preference("general.useragent.override", random.choice(user_agents))
     
-    # Дополнительные настройки для незаметности
     firefox_options.set_preference("privacy.resistFingerprinting", True)
     firefox_options.set_preference("privacy.trackingprotection.enabled", True)
     firefox_options.set_preference("dom.event.clipboardevents.enabled", False)
     firefox_options.set_preference("media.volume_scale", "0.0")
-    
-    # Настройки для производительности
     firefox_options.set_preference("gfx.webrender.all", True)
     firefox_options.set_preference("layers.acceleration.force-enabled", True)
     
-    # Создаем сервис и драйвер
     service = Service(GeckoDriverManager().install())
     driver = webdriver.Firefox(service=service, options=firefox_options)
     
-    # Устанавливаем размер окна как у реального пользователя
     driver.set_window_size(random.randint(1200, 1400), random.randint(800, 1000))
     
-    # Эмулируем человеческое поведение
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     driver.execute_script("window.chrome = undefined;")
     
     return driver
 
-# Передаём драйвер как аргумент
 def get_product_details(driver, product_id):
     driver.get(f"https://www.wildberries.ru/catalog/{product_id}/detail.aspx")
     details = {
         "description": "",
-        "specifications": {},  # Словарь для всех характеристик
+        "specifications": {},
         "power_type": None,
         "zones": None
     }
     
-    # Умное ожидание вместо фиксированного sleep
     WebDriverWait(driver, 30).until(
         EC.presence_of_element_located((By.CLASS_NAME, "main__container"))
     )
     
-    # Проверка и клик по кнопке подтверждения возраста
     try:
         button_confirm_age = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, "/html/body/div[1]/div/div/button[1]"))
@@ -149,17 +136,14 @@ def get_product_details(driver, product_id):
     except Exception:
         print("Кнопка подтверждения возраста не найдена")
     
-    # Прокрутка с ожиданием
     driver.execute_script("window.scrollBy(0, 800)")
 
-    # Нажатие на характеристики с улучшенным ожиданием
     try:
         button = WebDriverWait(driver, 15).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, "button.product-page__btn-detail.hide-mobile.j-details-btn-desktop"))
         )
         driver.execute_script("arguments[0].click();", button)
         
-        # Ожидание загрузки контента характеристик
         try:
             WebDriverWait(driver, 15).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, ".product-params, .option__text"))
@@ -168,7 +152,6 @@ def get_product_details(driver, product_id):
         except:
             print("Характеристики не найдены")
         
-        # Сбор данных
         try:
             time.sleep(2)
             details["description"] = driver.find_element(By.CSS_SELECTOR, ".option__text").text
@@ -185,39 +168,28 @@ def get_product_details(driver, product_id):
             
         # Парсинг характеристик
         try:
-            # Находим все таблицы с характеристиками
             tables = driver.find_elements(By.CSS_SELECTOR, "table.product-params__table")
             for table in tables:
-                # Извлекаем название группы характеристик
                 try:
                     group_name = table.find_element(By.CSS_SELECTOR, "caption.product-params__caption").text
-
-                    # Создаем подраздел для этой группы
                     details["specifications"][group_name] = {}
                     
-                    # Обрабатываем строки таблицы
                     rows = table.find_elements(By.CSS_SELECTOR, "tr.product-params__row")
                     for row in rows:
                         try:
                             name = row.find_element(By.CSS_SELECTOR, "th.product-params__cell").text.strip()
                             value = row.find_element(By.CSS_SELECTOR, "td.product-params__cell").text.strip()
-                            
-                            # Сохраняем характеристику в соответствующей группе
                             details["specifications"][group_name][name] = value
                             
-                            # Для совместимости сохраняем особые поля
                             if any(word in name.lower() for word in ['питани', 'питание', 'электропитание']):
                                 details["power_type"] = value
                             elif any(word in name.lower() for word in ['зон', 'област', 'воздейств']):
-                                details["zones"] = value
-                            
-                                
+                                details["zones"] = value 
                         except Exception as e:
                             print(f"Ошибка обработки строки: {str(e)}")
                             continue
                 except:
                     continue
-                        
         except Exception as e:
             print(f"Ошибка парсинга характеристик: {str(e)}")
             
@@ -233,7 +205,6 @@ def parse_product_data(product_data, product_id):
     1. Основная информация (main_info)
     2. Характеристики (specifications)
     """
-    # Создаем первый DataFrame с основной информацией
     main_info = pd.DataFrame({
         'id': [product_id],
         'power_type': [product_data['power_type']],
@@ -241,12 +212,11 @@ def parse_product_data(product_data, product_id):
         'description': [product_data['description']]
     })
     
-    # Создаем второй DataFrame с характеристиками
     specs_list = []
     for group_name, group_items in product_data['specifications'].items():
         for name, value in group_items.items():
             specs_list.append({
-                'good_id': product_id,  # foreign key (дублирует id)
+                'good_id': product_id,
                 'group_name': group_name,
                 'name': name,
                 'value': value
