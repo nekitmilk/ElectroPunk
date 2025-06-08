@@ -1,6 +1,7 @@
 import requests
 import pandas as pd 
 import time
+import re
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -17,6 +18,14 @@ import random
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+from threading import Lock
+import os
+from concurrent.futures import ThreadPoolExecutor
+
+# class parser:
+    
+#     pass
 
 def get_wb_products(query="электростимулятор", pages=3):
     all_products = []
@@ -120,7 +129,8 @@ def get_product_details(driver, product_id):
         "description": "",
         "specifications": {},
         "power_type": None,
-        "zones": None
+        "zones": None,
+        "type": None
     }
     
     WebDriverWait(driver, 30).until(
@@ -132,9 +142,9 @@ def get_product_details(driver, product_id):
             EC.element_to_be_clickable((By.XPATH, "/html/body/div[1]/div/div/button[1]"))
         )
         button_confirm_age.click()
-        print("Подтверждение возраста выполнено")
+        print(f"{product_id} Подтверждение возраста выполнено")
     except Exception:
-        print("Кнопка подтверждения возраста не найдена")
+        print(f"{product_id} Кнопка подтверждения возраста не найдена")
     
     driver.execute_script("window.scrollBy(0, 800)")
 
@@ -148,23 +158,23 @@ def get_product_details(driver, product_id):
             WebDriverWait(driver, 15).until(
                 EC.visibility_of_element_located((By.CSS_SELECTOR, ".product-params, .option__text"))
             )
-            print("Характеристики успешно открыты")
+            print(f"{product_id} Характеристики успешно открыты")
         except:
-            print("Характеристики не найдены")
+            print(f"{product_id} Характеристики не найдены")
         
         try:
             time.sleep(2)
             details["description"] = driver.find_element(By.CSS_SELECTOR, ".option__text").text
-            print("Описание успешно записано")
+            print(f"{product_id} Описание успешно записано")
         except Exception:
-            print("Описание 1 не найдено")
+            print(f"{product_id} Описание 1 не найдено")
             try:
                 descriptions = driver.find_elements(By.CSS_SELECTOR, ".option__text--md")
                 for description in descriptions:
                     details["description"] = details["description"] + description.text
-                print("Описание успешно записано")
+                print(f"{product_id} Описание успешно записано")
             except Exception:
-                print("Описание 2 не найдено")
+                print(f"{product_id} Описание 2 не найдено")
             
         # Парсинг характеристик
         try:
@@ -185,16 +195,18 @@ def get_product_details(driver, product_id):
                                 details["power_type"] = value
                             elif any(word in name.lower() for word in ['зон', 'област', 'воздейств']):
                                 details["zones"] = value 
+                            elif any(word in name.lower() for word in ['тип']):
+                                details["type"] = value 
                         except Exception as e:
-                            print(f"Ошибка обработки строки: {str(e)}")
+                            print(f"{product_id} Ошибка обработки строки: {str(e)}")
                             continue
                 except:
                     continue
         except Exception as e:
-            print(f"Ошибка парсинга характеристик: {str(e)}")
+            print(f"{product_id} Ошибка парсинга характеристик: {str(e)}")
             
     except Exception as e:
-        print(f"Ошибка открытия характеристик: {str(e)}")
+        print(f"{product_id} Ошибка открытия характеристик: {str(e)}")
     
     return details
 
@@ -209,6 +221,7 @@ def parse_product_data(product_data, product_id):
         'id': [product_id],
         'power_type': [product_data['power_type']],
         'zones': [product_data['zones']],
+        'type': [product_data['type']],
         'description': [product_data['description']]
     })
     
@@ -225,3 +238,106 @@ def parse_product_data(product_data, product_id):
     specifications = pd.DataFrame(specs_list)
     
     return main_info, specifications
+
+def get_product_feedbacks(driver, product_id):
+    driver.get(f"https://www.wildberries.ru/catalog/{product_id}/feedbacks")
+
+    # Ожидание загрузки основного контейнера с отзывами
+    WebDriverWait(driver, 30).until(
+        EC.presence_of_element_located((By.CLASS_NAME, "comments__list, .non-comments"))
+    )
+    
+    try:
+        no_feedback = driver.find_element(By.CLASS_NAME, ".non-comments")
+        print(f"{product_id} - нет отзывов")
+        return pd.DataFrame(columns=['product_id', 'rating', 'advantage', 'disadvantage', 'comment'])
+    except:
+        pass
+
+    # Проверка и переключение на вкладку "Этот вариант" если доступна
+    try:
+        # Ожидаем появления переключателя вариантов
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".product-feedbacks__tabs"))
+        )
+        
+        # Ищем кнопку "Этот вариант"
+        variant_button = driver.find_element(
+            By.CSS_SELECTOR, "li.product-feedbacks__tab:nth-child(2) > button:nth-child(1)"
+        )
+        variant_button.click()
+        time.sleep(1.5)
+    except:
+        # Если нет переключателя или кнопки, продолжаем как обычно
+        print(f"{product_id} - не удалось найти кнопку \"Этот вариант\"")
+        pass
+
+    # Прокрутка страницы для загрузки ВСЕХ отзывов
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    scroll_attempts = 0
+    max_scroll_attempts = 100 # Максимум попыток прокрутки для защиты от бесконечного цикла
+
+    while scroll_attempts < max_scroll_attempts:
+        # Прокрутка вниз
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(1.5)  # Ожидание подгрузки контента
+        
+        # Проверка изменения высоты страницы
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:
+            break
+        last_height = new_height
+        scroll_attempts += 1
+
+    # Сбор всех отзывов
+    feedback_items = driver.find_elements(By.CSS_SELECTOR, "li.comments__item.feedback")
+    feedbacks_list = []
+
+    for item in feedback_items:
+        try:
+            # Парсинг рейтинга
+            rating_elem = item.find_element(By.CLASS_NAME, "feedback__rating")
+            rating_class = rating_elem.get_attribute("class")
+            rating = int(re.search(r'star(\d+)', rating_class).group(1))
+        except:
+            rating = None
+
+        advantage = None
+        disadvantage = None
+        comment = None
+        
+        # Парсинг текста отзыва
+        try:
+            text_block = item.find_element(By.CSS_SELECTOR, ".feedback__text.j-feedback__text")
+            
+            # Обработка структурированных отзывов (с разделами)
+            sections = text_block.find_elements(By.CLASS_NAME, "feedback__text--item")
+            if sections:
+                for section in sections:
+                    text = section.text.strip()
+                    if not text:
+                        continue
+                        
+                    if "feedback__text--item-pro" in section.get_attribute("class"):
+                        advantage = text
+                    elif "feedback__text--item-con" in section.get_attribute("class"):
+                        disadvantage = text
+                    else:
+                        comment = text
+            # Обработка неструктурированных отзывов
+            else:
+                comment = text_block.text.strip()
+        except:
+            pass  # Если текста нет, оставляем поля пустыми
+
+        feedbacks_list.append({
+            'product_id': product_id,
+            'rating': rating,
+            'advantage': advantage,
+            'disadvantage': disadvantage,
+            'comment': comment
+        })
+
+    feedbacks = pd.DataFrame(feedbacks_list)
+    print(f"{product_id} Отзывы успешно собраны. Количество отзывов: {len(feedbacks)}")
+    return feedbacks
