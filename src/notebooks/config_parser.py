@@ -1,1 +1,1 @@
-browser_headless = True
+BROWSER_HEADLESS = True

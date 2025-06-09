@@ -50,6 +50,7 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
+# ElectroPunk
 __pycache__
-
 trash
+*.log
