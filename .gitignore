@@ -55,3 +55,4 @@ __pycache__
 trash
 *.log
 notebooks/*.csv
+.env
