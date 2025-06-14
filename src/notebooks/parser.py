@@ -25,14 +25,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config_parser import *
 
+
 import logging
 logging.basicConfig(level=logging.INFO, filename="parser.log", filemode="w",
                 format="%(asctime)s %(levelname)s %(message)s")
 
 from dotenv import load_dotenv
-
 load_dotenv()
 token = os.getenv('GH_TOKEN')
+
+import undetected_chromedriver as uc 
+from selenium.webdriver.common.keys import Keys
 
 class Parser:
     def __init__(self):
@@ -43,6 +46,8 @@ class Parser:
             self.driver = self._init_driver_firefox(BROWSER_HEADLESS)
         elif browser == "chrome":
             self.driver = self._init_driver_chrome()
+        elif browser == "undetected_chrome":
+            self.driver = self._init_driver_undetected_chrome(CHROME_HEADLESS)
         else:
             raise ValueError(f"Unsupported browser: {browser}")
         
@@ -118,6 +123,11 @@ class Parser:
         
         return driver
     
+    def _init_driver_undetected_chrome(self, headless = False):
+        driver = uc.Chrome(headless=headless)
+        driver.implicitly_wait(5)
+        return driver
+
     def restart_driver(self):
         if self.driver:
             self.driver.quit()
@@ -139,6 +149,31 @@ class Parser:
     
     def safe_close(self):
         self.__del__()
+
+    @staticmethod
+    def _scroll_page_down(driver):
+        # Прокрутка страницы для загрузки ВСЕХ отзывов
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        scroll_attempts = 0
+        max_scroll_attempts = 10 # Максимум попыток прокрутки для защиты от бесконечного цикла
+
+        while scroll_attempts < max_scroll_attempts:
+            prev_count = 0
+            new_items = len(driver.find_elements(By.CSS_SELECTOR, "li.comments__item"))
+            if new_items > prev_count:
+                prev_count = new_items
+                scroll_attempts = 0  # Сброс при нахождении новых
+            else:
+                scroll_attempts += 1
+            # Прокрутка вниз
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1.5)  # Ожидание подгрузки контента
+            
+            # Проверка изменения высоты страницы
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
 
 class WB_Parser(Parser):
     def __init__(self):
@@ -402,7 +437,51 @@ class WB_Parser(Parser):
         return super().__exit__(exc_type, exc_val, exc_tb)
     
 class Ozon_Parser(Parser):
-    pass
+    def __init__(self):
+        super().__init__()
+    
+    def get_products_links(self, query="миостимулятор", driver=None):
+        if driver is None:
+            if not self.driver:  # Если драйвер еще не инициализирован
+                self._init_driver(browser="undetected_chrome")
+                logging.info(f"Инициализация драйвера {type(self.driver)}")
+            driver = self.driver
+        
+        try:
+            self.driver.get(url='https://ozon.ru')
+            time.sleep(2)
+
+            find_input = driver.find_element(By.NAME, 'text')
+            find_input.clear()
+            find_input.send_keys(query)
+            time.sleep(2)
+            find_input.send_keys(Keys.ENTER)
+            time.sleep(2)
+
+            # self._scroll_page_down(driver)
+
+            try:
+                find_links = driver.find_elements(By.CSS_SELECTOR, "a.tile-clickable-element")
+                products_urls = list(set([f'{link.get_attribute("href")}' for link in find_links]))
+
+                logging.info('[+] Ссылки на товары собраны!')
+            except:
+                logging.error('[!] Что-то сломалось при сборе ссылок на товары!')
+
+
+            return pd.DataFrame(products_urls)
+        except Exception as e:
+            logging.error(f"Произошла ошибка при получении товаров с Ozon: {e}")
+            pass
+
+    def __del__(self):
+        return super().__del__()
+    
+    def __enter__(self):
+        return super().__enter__()
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return super().__exit__(exc_type, exc_val, exc_tb)
 
 def parse_product_data(product_data):
     """

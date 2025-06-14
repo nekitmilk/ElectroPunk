@@ -56,3 +56,5 @@ trash
 *.log
 notebooks/*.csv
 .env
+*.csv
+electropunk
