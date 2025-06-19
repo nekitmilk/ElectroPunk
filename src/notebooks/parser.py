@@ -189,32 +189,6 @@ class Parser:
             last_height = new_height
 
     @staticmethod
-    def _scroll_page_mid(driver):
-        # Прокрутка страницы для загрузки ВСЕХ отзывов
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        scroll_attempts = 0
-        max_scroll_attempts = 10 # Максимум попыток прокрутки для защиты от бесконечного цикла
-
-        while scroll_attempts < max_scroll_attempts:
-            prev_count = 0
-            new_items = len(driver.find_elements(By.CSS_SELECTOR, "div.tile-root"))
-            if new_items > prev_count:
-                prev_count = new_items
-                scroll_attempts = 0  # Сброс при нахождении новых
-            else:
-                scroll_attempts += 1
-                logging.info("Не получилось прокрутить страницу")
-            # Прокрутка вниз
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.5);")
-            time.sleep(3)  # Ожидание подгрузки контента
-            
-            # Проверка изменения высоты страницы
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            if new_height == last_height:
-                break
-            last_height = new_height
-
-    @staticmethod
     def _page_down_slowly(driver):
         # Прокрутка страницы для загрузки ВСЕХ отзывов
         last_height = driver.execute_script("return document.body.scrollHeight")
@@ -254,57 +228,6 @@ class Parser:
             if new_height == last_height:
                 break
             last_height = new_height
-
-    @staticmethod
-    def _page_down_slowly_2(driver):
-        # Прокрутка страницы для загрузки ВСЕХ карточек товаров
-        last_height = driver.execute_script("return document.body.scrollHeight")
-        scroll_attempts = 0
-        max_scroll_attempts = 30  # Уменьшено для оптимизации
-        prev_count = 0
-        stability_counter = 0
-        required_stability = 3  # Требуемое количество стабильных проверок
-        
-        while scroll_attempts < max_scroll_attempts and stability_counter < required_stability:
-            # Прокрутка плавным скриптом
-            driver.execute_script('''
-                window.scrollBy({
-                    top: 800,
-                    behavior: 'smooth'
-                });
-            ''')
-            
-            # Динамическое ожидание вместо фиксированного
-            time.sleep(3 + random.uniform(0.2, 0.5))  # Случайная задержка
-            
-            # Обновляем высоту страницы
-            new_height = driver.execute_script("return document.body.scrollHeight")
-            
-            # Проверяем появление новых карточек
-            current_items = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
-            current_count = len(current_items)
-            
-            if current_count > prev_count:
-                # Нашли новые элементы - сбрасываем счетчики
-                prev_count = current_count
-                stability_counter = 0
-                scroll_attempts = 0
-            elif new_height == last_height:
-                # Высота не изменилась - увеличиваем счетчик стабильности
-                stability_counter += 1
-            else:
-                # Высота изменилась, но новых карточек нет
-                last_height = new_height
-                stability_counter = 0
-            
-            scroll_attempts += 1
-            
-            # Ранний выход если достигли конца
-            current_position = driver.execute_script("return window.pageYOffset + window.innerHeight")
-            if current_position >= new_height:
-                break
-
-        logging.info(f"Завершение прокрутки. Найдено элементов: {prev_count}, Попыток: {scroll_attempts}")
 
 class WB_Parser(Parser):
     def __init__(self):
@@ -588,62 +511,26 @@ class Ozon_Parser(Parser):
             time.sleep(2)
             find_input.send_keys(Keys.ENTER)
             time.sleep(2)
-            
+    
             logging.info("Начало прокрутки страницы")
-            # self._page_down_slowly_2(driver)
             seen_links = set()
             products_data = []
             scroll_attempts = 0
             max_attempts = 10
             while scroll_attempts < max_attempts and len(products_data) < max_products:
-                driver.execute_script("window.scrollBy(0, window.innerHeight * 0.8);")
-                time.sleep(1.5)
-                current_cards = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
-                new_items = 0
-
-                for card in current_cards:
-                    try:
-                        link_elem = card.find_element(By.CSS_SELECTOR, "a.tile-clickable-element[href*='/product/']")
-                        link = link_elem.get_attribute("href")
-                        
-                        if link not in seen_links:
-                            seen_links.add(link)
-                            title = card.find_element(By.CSS_SELECTOR, "span.tsBody500Medium").text
-
-                            # Цена (актуальная)
-                            try:
-                                price_elem = card.find_element(By.CSS_SELECTOR, "span.tsHeadline500Medium")
-                                price = price_elem.text
-                            except:
-                                # Если нет скидки, ищем обычную цену
-                                price_elem = card.find_element(By.CSS_SELECTOR, "span[class*='tsHeadline']")
-                                price = price_elem.text
-                            
-                            try:
-                                bottom_elem = WebDriverWait(card, 0.5).until(
-                                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.tsBodyMBold"))
-                                )
-                                rating = bottom_elem.text[:3]
-                                reviews = re.sub(r'[^\d]', '', bottom_elem.text[3:])
-                            except:
-                                logging.info(f"Отзывы и рейтинг не найдены для товара: {title}")
-                                rating = 0
-                                reviews = 0
-
-                            products_data.append({
-                                "link": link,
-                                "title": title,
-                                "price": price,
-                                "rating": rating,
-                                "reviews": reviews
-                            })
-                            new_items += 1
-                    except Exception as e:
-                        logging.debug(f"Пропуск карточки: {str(e)}")
-                        continue
+                # driver.execute_script("window.scrollBy(0, window.innerHeight * 2);")
+                driver.execute_script("""
+                    window.scrollBy({
+                        top: window.innerHeight * 2,
+                        behavior: 'smooth'
+                    });
+                """)
+                time.sleep(0.1 + random.uniform(0.1, 0.2))
+                new_items = self._collect_current_cards_(seen_links, products_data)
                     
                 if new_items == 0:
                     scroll_attempts += 1
+                    time.sleep(1)
                     logging.info(f"Новых товаров нет ({scroll_attempts}/{max_attempts})")
                 else:
                     scroll_attempts = 0  # Сброс счетчика
@@ -655,59 +542,58 @@ class Ozon_Parser(Parser):
             logging.info("Конец прокрутки страницы")
             logging.info(f"Завершено. Собрано товаров: {len(products_data)}")
             return pd.DataFrame(products_data)
-            # time.sleep(2)
-            # product_cards = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
-            
-            # for card in product_cards:
-            #     try:
-            #         # Ссылка на товар
-            #         # link_elem = card.find_element(By.CSS_SELECTOR, "a.tile-clickable-element")
-            #         link_elem = card.find_element(By.CSS_SELECTOR, "a.tile-clickable-element[href*='/product/']")
-            #         link = link_elem.get_attribute("href")
-                    
-            #         # Название товара
-            #         title_elem = card.find_element(By.CSS_SELECTOR, "span.tsBody500Medium")
-            #         title = title_elem.text
-                    
-            #         # Цена (актуальная)
-            #         try:
-            #             price_elem = card.find_element(By.CSS_SELECTOR, "span.tsHeadline500Medium")
-            #             price = price_elem.text
-            #         except:
-            #             # Если нет скидки, ищем обычную цену
-            #             price_elem = card.find_element(By.CSS_SELECTOR, "span[class*='tsHeadline']")
-            #             price = price_elem.text
-                    
-
-            #         try:
-            #             bottom_elem = WebDriverWait(card, 0.5).until(
-            #                 EC.presence_of_element_located((By.CSS_SELECTOR, "div.tsBodyMBold"))
-            #             )
-            #             rating = bottom_elem.text[:3]
-            #             reviews = re.sub(r'[^\d]', '', bottom_elem.text[3:])
-            #         except:
-            #             logging.info(f"Отзывы и рейтинг не найдены для товара: {title}")
-            #             rating = 0
-            #             reviews = 0
-                    
-            #         products_data.append({
-            #             "link": link,
-            #             "title": title,
-            #             # "price": price,
-            #             # "rating": rating,
-            #             # "reviews": reviews
-            #         })
-            #         logging.info(f"Завершен парсинг товара: {title}")
-                    
-            #     except Exception as e:
-            #         logging.warning(f"Ошибка при парсинге карточки товара: {str(e)}")
-            #         continue
-
-            # logging.info(f'[+] Собрано данных о {len(products_data)} товарах!')
-            # return pd.DataFrame(products_data)
 
         except Exception as e:
             logging.error(f"Произошла ошибка при получении товаров с Ozon: {e}")
+
+    def _collect_current_cards_(self, seen_links: set, data_collector: list):
+        driver = self.driver
+        current_cards = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
+        new_items = 0
+
+        for card in current_cards:
+            try:
+                link_elem = card.find_element(By.CSS_SELECTOR, "a.tile-clickable-element[href*='/product/']")
+                link = link_elem.get_attribute("href")
+                
+                if link not in seen_links:
+                    seen_links.add(link)
+                    title = card.find_element(By.CSS_SELECTOR, "span.tsBody500Medium").text
+
+                    # Цена (актуальная)
+                    try:
+                        price_elem = card.find_element(By.CSS_SELECTOR, "span.tsHeadline500Medium")
+                        price = price_elem.text
+                    except:
+                        # Если нет скидки, ищем обычную цену
+                        price_elem = card.find_element(By.CSS_SELECTOR, "span[class*='tsHeadline']")
+                        price = price_elem.text
+                    
+                    try:
+                        bottom_elem = WebDriverWait(card, 0.5).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.tsBodyMBold"))
+                        )
+                        rating = bottom_elem.text[:3]
+                        reviews = re.sub(r'[^\d]', '', bottom_elem.text[3:])
+                    except:
+                        logging.info(f"Отзывы и рейтинг не найдены для товара: {title}")
+                        rating = 0
+                        reviews = 0
+
+                    data_collector.append({
+                        "link": link,
+                        "title": title,
+                        "price": price,
+                        "rating": rating,
+                        "reviews": reviews
+                    })
+                    new_items += 1
+            except Exception as e:
+                logging.debug(f"Пропуск карточки: {str(e)}")
+                continue
+    
+        return new_items
+
 
     def __del__(self):
         return super().__del__()
