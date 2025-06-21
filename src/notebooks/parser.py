@@ -25,7 +25,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config_parser import *
 
-
 import logging
 logging.basicConfig(level=logging.INFO, filename="parser.log", filemode="w",
                 format="%(asctime)s %(levelname)s %(message)s")
@@ -36,6 +35,7 @@ token = os.getenv('GH_TOKEN')
 
 import undetected_chromedriver as uc 
 from selenium.webdriver.common.keys import Keys
+
 
 class Parser:
     def __init__(self):
@@ -277,7 +277,6 @@ class WB_Parser(Parser):
                 
         return pd.DataFrame(all_products)
     
-    # Сделать так, чтобы он возвращал один df со всеми характеристиками, делить на main и other_specs нужно потом
     def get_product_details(self, product_id, driver=None) -> dict: 
         if driver is None:
             if not self.driver:  # Если драйвер еще не инициализирован
@@ -546,6 +545,101 @@ class Ozon_Parser(Parser):
         except Exception as e:
             logging.error(f"Произошла ошибка при получении товаров с Ozon: {e}")
 
+    def get_products_details(self, product_link, driver=None):
+        if driver is None:
+            if not self.driver:
+                self._init_driver(browser="undetected_chrome")
+            driver = self.driver
+        
+        details = {
+            "link": product_link,
+            "id": "",
+            "description": "",
+            "brand": "",
+            "specifications": {}
+        }
+        
+        try:
+            driver.get(product_link)
+            time.sleep(3)  # Ожидание загрузки страницы
+
+            # Парсинг артикула (ID)
+            try:
+                sku_button = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'button[data-widget="webDetailSKU"]'))
+                )
+                sku_text = sku_button.text
+                sku_value = re.search(r'\d+', sku_text)
+                if sku_value:
+                    details["id"] = int(sku_value.group(0))
+            except Exception as e:
+                logging.warning(f"Артикул не найден: {str(e)}")
+
+            # Парсинг бренда
+            try:
+                categories = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "ol.tsBodyControl400Small"))
+                )
+                items = categories.find_elements(By.CSS_SELECTOR, "li")
+                if items:
+                    last_item = items[-1]
+                    brand_link = last_item.find_element(By.CSS_SELECTOR, "a")
+                    brand = brand_link.text.strip()
+                    details["brand"] = brand
+            except Exception as e:
+                logging.warning(f"Бренд не найден: {str(e)}")
+
+
+            self._scroll_to_element('div[data-widget="webDescription"]')
+            # time.sleep(0.5)
+            
+            # Парсинг описания
+            try:
+                description_sections = WebDriverWait(driver, 10).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, 'div[data-widget="webDescription"]'))
+                )
+                
+                description_texts = []
+                for section in description_sections:
+                    content = section.find_elements(By.CSS_SELECTOR, '.RA-a1, .RA-a1 *')
+                    if content:
+                        section_text = "\n".join([e.text for e in content if e.text.strip()])
+                        description_texts.append(section_text)
+                
+                details["description"] = "\n\n".join(description_texts).strip()
+            except Exception as e:
+                logging.warning(f"Описание не найдено: {str(e)}")
+            
+            self._scroll_to_element("#section-characteristics")
+
+            # Парсинг характеристик
+            try:
+                specs_section = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.ID, 'section-characteristics'))
+                )
+                
+                specs_items = specs_section.find_elements(By.CSS_SELECTOR, 'dl.vk5_27')
+                for item in specs_items:
+                    try:
+                        key_elem = item.find_element(By.CSS_SELECTOR, '.vk4_27')
+                        value_elem = item.find_element(By.CSS_SELECTOR, '.v4k_27')
+                        
+                        key = key_elem.text.strip().rstrip(':')
+                        value = value_elem.text.strip()
+                        
+                        if key and value:
+                            details["specifications"][key] = value
+                    except:
+                        continue
+            except Exception as e:
+                logging.warning(f"Характеристики не найдены: {str(e)}")
+            
+            return details
+        
+        except Exception as e:
+            logging.error(f"Ошибка при получении деталей товара: {str(e)}")
+            return details
+    
     def _collect_current_cards_(self, seen_links: set, data_collector: list):
         driver = self.driver
         current_cards = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
@@ -594,6 +688,17 @@ class Ozon_Parser(Parser):
     
         return new_items
 
+    def _scroll_to_element(self, css_selector):
+        driver = self.driver
+        description_element = driver.find_element(By.CSS_SELECTOR, css_selector)
+        driver.execute_script("""
+            arguments[0].scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+                inline: 'center'
+            });
+        """, description_element)
+
 
     def __del__(self):
         return super().__del__()
@@ -641,6 +746,53 @@ def parse_product_data(product_data):
 
     main_info = pd.DataFrame({
         'id': [product_id],
+        'power_type': [details['power_type']],
+        'zones': [details['zones']],
+        'type': [details['type']],
+        'description': [details['description']]
+    })
+    specifications = pd.DataFrame(specs_list)
+    
+    return main_info, specifications
+
+def parse_product_data_ozon(product_data):
+    """
+    Преобразует сырые данные товара в два DataFrame:
+    1. Основная информация (main_info)
+    2. Характеристики (specifications)
+    """
+    product_id = product_data['id']
+    description = product_data['description']
+    brand = product_data['brand']
+    details = {
+        "id" : product_id,
+        "description": description,
+        "brand": brand,
+        "power_type": None,
+        "zones": None,
+        "type": None
+    }
+    specs_mapping = {
+        'power_type': ['питани', 'питание', 'электропитание'],
+        'zones': ['зон', 'област', 'воздейств'],
+        'type': ['вид массажа', 'тип массажа'],
+    }
+    
+    specs_list = []
+    for name, value in product_data['specifications'].items():
+        specs_list.append({
+            'good_id': product_id,
+            'name': name,
+            'value': value
+        })
+        for key, keywords in specs_mapping.items():
+            if any(kw in name.lower() for kw in keywords):
+                details[key] = value
+    
+
+    main_info = pd.DataFrame({
+        'id': [product_id],
+        'brand': [details['brand']],
         'power_type': [details['power_type']],
         'zones': [details['zones']],
         'type': [details['type']],
