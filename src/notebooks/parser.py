@@ -493,7 +493,7 @@ class Ozon_Parser(Parser):
     def __init__(self):
         super().__init__()
     
-    def get_products_links(self, query="миостимулятор", driver=None, max_products=200):
+    def get_products_links(self, query="миостимулятор", driver=None, max_products=200) -> pd.DataFrame:
         if driver is None:
             if not self.driver:  # Если драйвер еще не инициализирован
                 self._init_driver(browser="undetected_chrome")
@@ -545,7 +545,7 @@ class Ozon_Parser(Parser):
         except Exception as e:
             logging.error(f"Произошла ошибка при получении товаров с Ozon: {e}")
 
-    def get_products_details(self, product_link, driver=None):
+    def get_products_details(self, product_link, driver=None) -> dict:
         if driver is None:
             if not self.driver:
                 self._init_driver(browser="undetected_chrome")
@@ -591,7 +591,7 @@ class Ozon_Parser(Parser):
 
 
             self._scroll_to_element('div[data-widget="webDescription"]')
-            # time.sleep(0.5)
+            time.sleep(0.5)
             
             # Парсинг описания
             try:
@@ -764,8 +764,10 @@ def parse_product_data_ozon(product_data):
     product_id = product_data['id']
     description = product_data['description']
     brand = product_data['brand']
+    link = product_data['link']
     details = {
         "id" : product_id,
+        'link': link,
         "description": description,
         "brand": brand,
         "power_type": None,
@@ -792,6 +794,7 @@ def parse_product_data_ozon(product_data):
 
     main_info = pd.DataFrame({
         'id': [product_id],
+        'link': [details['link']],
         'brand': [details['brand']],
         'power_type': [details['power_type']],
         'zones': [details['zones']],
@@ -801,3 +804,14 @@ def parse_product_data_ozon(product_data):
     specifications = pd.DataFrame(specs_list)
     
     return main_info, specifications
+
+def write_lock_df_to_file(path, df, write_lock):
+    with write_lock:
+        try:
+            if not os.path.exists(path):
+                df.to_csv(path, index=False)
+            else:
+                df.to_csv(path, mode='a', header=False, index=False) 
+            logging.debug(f"Успешная запись в файл!")
+        except Exception as e:
+            logging.error(f"Ошибка записи в файл: {e}")
