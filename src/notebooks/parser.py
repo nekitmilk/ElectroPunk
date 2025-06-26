@@ -468,6 +468,7 @@ class WB_Parser(Parser):
 
                 feedbacks_list.append({
                     'product_id': product_id,
+                    'marketplace': 'wb',
                     'rating': rating,
                     'advantage': advantage,
                     'disadvantage': disadvantage,
@@ -640,6 +641,70 @@ class Ozon_Parser(Parser):
             logging.error(f"Ошибка при получении деталей товара: {str(e)}")
             return details
     
+    def get_product_feedbacks(self, product_id, driver=None, max_product_feedbacks=10_000) -> pd.DataFrame:
+
+        this_variant_selector = 'e820-b4'
+        recomendation_selector = 'jl9_24'
+
+        if driver is None:
+            if not self.driver:  # Если драйвер еще не инициализирован
+                self._init_driver(browser="undetected_chrome")
+                logging.info(f"Инициализация драйвера {type(self.driver)}")
+            driver = self.driver
+        
+        try:
+            driver.get(url=f"https://www.ozon.ru/product/{product_id}/")
+            time.sleep(2)
+            self._scroll_to_element('div.e820-a')
+            
+            try:
+                variant_button = WebDriverWait(driver, 1).until(
+                    EC.element_to_be_clickable((By.CSS_SELECTOR, f'button.{this_variant_selector}'))
+                )
+                driver.execute_script("arguments[0].click();", variant_button)
+            except:
+                logging.info('Не удалось найти кнопку "Этот вариант товара"')
+
+            time.sleep(1)
+            seen_feedbacks = set()
+            product_feedbacks = []
+            scroll_attempts = 0
+            max_attempts = 3
+
+            while scroll_attempts < max_attempts and len(product_feedbacks) < max_product_feedbacks:
+                driver.execute_script("""
+                    window.scrollTo({
+                        top: document.body.scrollHeight - 4500,
+                        behavior: 'smooth'
+                    });
+                """)
+                time.sleep(0.1 + random.uniform(0.1, 0.2))
+                new_items = self._collect_current_feedbacks_(seen_feedbacks, product_feedbacks, product_id)
+                    
+                if new_items == 0:
+                    scroll_attempts += 1
+                    self._scroll_to_element(web_element=driver.find_elements(
+                        By.CSS_SELECTOR, (f'div.{recomendation_selector}'))[-1]
+                    )
+
+                    time.sleep(2)
+                    logging.info(f"Новых товаров нет ({scroll_attempts}/{max_attempts})")
+                else:
+                    scroll_attempts = 0  # Сброс счетчика
+                    logging.info(f"Найдено новых: {new_items} | Всего: {len(product_feedbacks)}")
+                
+                # Выход при достижении лимита
+                if len(product_feedbacks) >= max_product_feedbacks:
+                    break
+            logging.info("Конец прокрутки страницы")
+            logging.info(f"Завершено. Собрано отзывов: {len(product_feedbacks)}")
+            return pd.DataFrame(product_feedbacks)
+
+
+
+        except Exception as e:
+            logging.info(f"Не удалось получить отзывы на товар, ошибка: {e}")
+
     def _collect_current_cards_(self, seen_links: set, data_collector: list):
         driver = self.driver
         current_cards = driver.find_elements(By.CSS_SELECTOR, "div.tile-root")
@@ -688,16 +753,108 @@ class Ozon_Parser(Parser):
     
         return new_items
 
-    def _scroll_to_element(self, css_selector):
+    def _collect_current_feedbacks_(self, seen_feedbacks: set, data_collector: list, product_id: str):
         driver = self.driver
-        description_element = driver.find_element(By.CSS_SELECTOR, css_selector)
+        # current_feedbacks = driver.find_elements(By.CSS_SELECTOR, "div.v5r_30")
+        current_feedbacks = driver.find_elements(By.XPATH, '//*[@data-review-uuid]')
+
+        rating_selector = 'qr4_30'
+        read_full_selector = 'r5q_30'
+        advantage_selector = 'q5r_30'
+        paragraph_selector = 'rq5_30'
+        text_selector = 'qr5_30'
+        new_items = 0
+
+        for feedback in current_feedbacks:
+            try:
+                feedback_id = feedback.get_attribute('data-review-uuid')
+                # feedback_id = feedback_id_elem.get_attribute('data-review-uuid')
+                # print(feedback_id_elem.text)
+                if feedback_id in seen_feedbacks:
+                    continue
+
+                seen_feedbacks.add(feedback_id)
+
+                # Извлекаем оценку (количество звезд)
+                try:
+                    stars_container = feedback.find_element(By.CSS_SELECTOR, f'div.{rating_selector}')
+                    filled_stars = stars_container.find_elements(
+                        By.CSS_SELECTOR, 'svg[style*="rgb(255, 165, 0)"]'
+                    )
+                    rating = len(filled_stars)
+                except:
+                    rating = 0
+                    logging.debug("Оценка не найдена")
+
+                # Извлекаем текст отзыва
+                try:
+                    read_full_button = feedback.find_element(By.CSS_SELECTOR, f'span.{read_full_selector}')
+                    driver.execute_script("arguments[0].click();", read_full_button)
+                except:
+                    logging.debug('Кнопка "Читать полностью" не найдена"')
+
+                advantage = None
+                disadvantage = None
+                comment = None
+                try:
+                    texts_elem = feedback.find_elements(By.CSS_SELECTOR, f'div.{paragraph_selector}')
+                    if len(texts_elem) > 1:
+                        for text in texts_elem:
+                            text_field_name = text.find_element(By.CSS_SELECTOR, f'div.{advantage_selector}').text.strip().lower()
+                            if text_field_name == 'достоинства':
+                                advantage = text.find_element(By.CSS_SELECTOR, f'span.{text_selector}').text.strip()
+                            elif text_field_name == 'недостатки':
+                                disadvantage = text.find_element(By.CSS_SELECTOR, f'span.{text_selector}').text.strip()
+                            else:
+                                comment = text.find_element(By.CSS_SELECTOR, f'span.{text_selector}').text.strip()
+                        pass
+                    else:
+                        comment = feedback.find_element(By.CSS_SELECTOR, f'span.{text_selector}').text.strip()
+                except:
+                    comment = ""
+                    logging.debug("Текст отзыва не найден")
+
+                data_collector.append({
+                    'product_id': int(product_id),
+                    'marketplace': 'ozon',
+                    'rating': rating,
+                    'advantage': advantage,
+                    'disadvantage': disadvantage,
+                    'comment': comment
+                })
+                new_items += 1
+            except Exception as e:
+                logging.info(f"Пропуск отзыва: {str(e)}")
+                continue
+
+        return new_items
+
+    def _scroll_to_element(self, css_selector=None, xpath=None, web_element=None):
+        """
+        Прокрутка к элементу
+        
+        :param css_selector: CSS селектор элемента
+        :param xpath: XPath элемента
+        :param web_element: Веб-элемент
+        :param scroll_duration: Длительность прокрутки в секундах
+        """
+        driver = self.driver
+        if css_selector:
+            element = driver.find_element(By.CSS_SELECTOR, css_selector)
+        elif xpath:
+            element = driver.find_element(By.XPATH, xpath)
+        elif web_element:
+            element = web_element
+        
         driver.execute_script("""
             arguments[0].scrollIntoView({
                 behavior: 'smooth',
                 block: 'center',
                 inline: 'center'
             });
-        """, description_element)
+        """, element)
+        
+        
 
 
     def __del__(self):
